@@ -72,6 +72,17 @@ JNIEXPORT void JNICALL Java_com_tencent_mars_stn_StnLogic_reset
 
 /*
  * Class:     com_tencent_mars_stn_StnLogic_Java2C
+ * Method:    resetAndInitEncoderVersion
+ * Signature: (I)V
+ */
+DEFINE_FIND_STATIC_METHOD(KJava2C_resetAndInitEncoderVersion, KNetJava2C, "resetAndInitEncoderVersion", "(I)V")
+JNIEXPORT void JNICALL Java_com_tencent_mars_stn_StnLogic_resetAndInitEncoderVersion
+  (JNIEnv *_env, jclass clz, jint _packer_encoder_version) {
+	ResetAndInitEncoderVersion(_packer_encoder_version);
+}
+
+/*
+ * Class:     com_tencent_mars_stn_StnLogic_Java2C
  * Method:    setLonglinkSvrAddr
  * Signature: (Ljava/lang/String;[ILjava/lang/String;)V
  */

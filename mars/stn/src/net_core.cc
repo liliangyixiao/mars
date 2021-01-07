@@ -73,7 +73,7 @@ NetCore::NetCore()
     , dynamic_timeout_(new DynamicTimeout)
     , shortlink_task_manager_(new ShortLinkTaskManager(*net_source_, *dynamic_timeout_, messagequeue_creater_.GetMessageQueue()))
     , shortlink_error_count_(0)
-    , shortlink_try_flag_(false){
+    , shortlink_try_flag_(false) {
     xwarn2(TSF"public component version: %0 %1", __DATE__, __TIME__);
     xassert2(messagequeue_creater_.GetMessageQueue() != MessageQueue::KInvalidQueueID, "CreateNewMessageQueue Error!!!");
     xinfo2(TSF"netcore messagequeue_id=%_, handler:(%_,%_)", messagequeue_creater_.GetMessageQueue(), asyncreg_.Get().queue, asyncreg_.Get().seq);
@@ -172,7 +172,6 @@ void NetCore::__InitLongLink(){
 
     LonglinkConfig defaultConfig(DEFAULT_LONGLINK_NAME, DEFAULT_LONGLINK_GROUP, true);
     defaultConfig.is_keep_alive = true;
-    defaultConfig.longlink_encoder = &gDefaultLongLinkEncoder;
     CreateLongLink(defaultConfig);
 
     // async
@@ -254,7 +253,8 @@ void NetCore::StartTask(const Task& _task) {
 
     Task task = _task;
     if (!__ValidAndInitDefault(task, group)) {
-        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalTaskParam);
+        ConnectProfile profile;
+        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalTaskParam, profile);
         return;
     }
     
@@ -264,8 +264,8 @@ void NetCore::StartTask(const Task& _task) {
 
     if (0 == task.channel_select) {
         xerror2(TSF"error channelType (%_, %_), ", kEctLocal, kEctLocalChannelSelect) >> group;
-        
-        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalChannelSelect);
+        ConnectProfile profile;
+        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalChannelSelect, profile);
         return;
     }
 
@@ -276,7 +276,8 @@ void NetCore::StartTask(const Task& _task) {
 #endif
         ) {
         xerror2(TSF"error no net (%_, %_), ", kEctLocal, kEctLocalNoNet) >> group;
-        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalNoNet);
+        ConnectProfile profile;
+        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalNoNet, profile);
         return;
     }
     
@@ -287,7 +288,8 @@ void NetCore::StartTask(const Task& _task) {
 #endif
     ){
         xerror2(TSF" error no net (%_, %_) return when no active", kEctLocal, kEctLocalNoNet) >> group;
-        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalNoNet);
+        ConnectProfile profile;
+        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalNoNet, profile);
         return;
     }
 #endif
@@ -341,7 +343,8 @@ void NetCore::StartTask(const Task& _task) {
 
     if (!start_ok) {
         xerror2(TSF"taskid:%_, error starttask (%_, %_)", task.taskid, kEctLocal, kEctLocalStartTaskFail);
-        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalStartTaskFail);
+        ConnectProfile profile;
+        OnTaskEnd(task.taskid, task.user_context, task.user_id, kEctLocal, kEctLocalStartTaskFail, profile);
     } else {
 #ifdef USE_LONG_LINK
         zombie_task_manager_->OnNetCoreStartTask();
@@ -536,17 +539,17 @@ int NetCore::__CallBack(int _from, ErrCmdType _err_type, int _err_code, int _fai
         xwarn2(TSF"task_callback_hook let task return. taskid:%_, cgi%_.", _task.taskid, _task.cgi);
         return 0;
      }
-
     if (kEctOK == _err_type || kTaskFailHandleTaskEnd == _fail_handle)
-        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code);
+        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code, GetConnectProfile(_task.taskid, Task::kChannelShort));
 
+    ConnectProfile profile;
     if (kCallFromZombie == _from)
-        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code);
+        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code, profile);
 
 #ifdef USE_LONG_LINK
     if (!zombie_task_manager_->SaveTask(_task, _taskcosttime))
 #endif
-        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code);
+        return OnTaskEnd(_task.taskid, _task.user_context, _task.user_id, _err_type, _err_code, profile);
 
     return 0;
 }
@@ -727,8 +730,11 @@ void NetCore::__ConnStatusCallBack() {
         all_connstatus = kConnected;
     }
 #endif
-    
-    xinfo2(TSF"reportNetConnectInfo all_connstatus:%_, longlink_connstatus:%_", all_connstatus, longlink_connstatus);
+    if(all_connstatus != all_connect_status_ || longlink_connstatus != longlink_connect_status_) {      // logs limits
+        all_connect_status_ = all_connstatus;
+        longlink_connect_status_ = longlink_connstatus;
+        xinfo2(TSF"reportNetConnectInfo all_connstatus:%_, longlink_connstatus:%_", all_connstatus, longlink_connstatus);
+    }
     ReportConnectStatus(all_connstatus, longlink_connstatus);
 }
 
@@ -885,4 +891,10 @@ std::shared_ptr<LongLinkMetaData> NetCore::DefaultLongLinkMeta() {
 std::shared_ptr<LongLinkMetaData> NetCore::GetLongLink(const std::string& _name) {
     return longlink_task_manager_->GetLongLink(_name);
 }
+
+
+  void NetCore::SetDebugHost(const std::string& _host) {
+    shortlink_task_manager_->SetDebugHost(_host);
+  }
+
 #endif

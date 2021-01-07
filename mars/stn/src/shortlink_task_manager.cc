@@ -61,8 +61,7 @@ ShortLinkTaskManager::ShortLinkTaskManager(NetSource& _netsource, DynamicTimeout
     , wakeup_lock_(new WakeUpLock())
 #endif
 {
-    xinfo_function(TSF"handler:(%_,%_)", asyncreg_.Get().queue, asyncreg_.Get().seq);
-    xinfo2(TSF"ShortLinkTaskManager messagequeue_id=%_", MessageQueue::Handler2Queue(asyncreg_.Get()));
+    xinfo_function(TSF"handler:(%_,%_), ShortLinkTaskManager messagequeue_id=%_", asyncreg_.Get().queue, asyncreg_.Get().seq, MessageQueue::Handler2Queue(asyncreg_.Get()));
 }
 
 ShortLinkTaskManager::~ShortLinkTaskManager() {
@@ -85,7 +84,7 @@ bool ShortLinkTaskManager::StartTask(const Task& _task) {
     }
 
 
-	xinfo2(TSF"task is long-polling task:%_, cgi:%_, timeout:%_",_task.long_polling, _task.cgi, _task.long_polling_timeout);
+    xinfo2(TSF"task is long-polling task:%_, cgi:%_, timeout:%_",_task.long_polling, _task.cgi, _task.long_polling_timeout);
 
     xdebug2(TSF"taskid:%0", _task.taskid);
 
@@ -266,13 +265,11 @@ void ShortLinkTaskManager::__RunOnStartTask() {
             get_real_host_(task.user_id, task.shortlink_host_list);
         }
         std::string host = task.shortlink_host_list.front();
-        xinfo2(TSF"host ip to callback is %_ ",host);
-
-        xinfo2(TSF"need auth cgi %_ , host %_ need auth %_ , long-polling %_", first->task.cgi, host, first->task.need_authed, first->task.long_polling);
+        xinfo2_if(!first->task.long_polling, TSF"need auth cgi %_ , host %_ need auth %_", first->task.cgi, host, first->task.need_authed);
         // make sure login
         if (first->task.need_authed) {
             bool ismakesureauthsuccess = MakesureAuthed(host, first->task.user_id);
-            xinfo2(TSF"auth result %_ host %_", ismakesureauthsuccess, host);
+            xinfo2_if(!first->task.long_polling && first->task.priority >= 0, TSF"auth result %_ host %_", ismakesureauthsuccess, host);
 
             if (!ismakesureauthsuccess) {
                 xinfo2_if(curtime % 3 == 1, TSF"makeSureAuth retsult=%0", ismakesureauthsuccess);
@@ -304,10 +301,8 @@ void ShortLinkTaskManager::__RunOnStartTask() {
         first->transfer_profile.first_pkg_timeout = __FirstPkgTimeout(first->task.server_process_cost, bufreq.Length(), sent_count, dynamic_timeout_.GetStatus());
         first->current_dyntime_status = (first->task.server_process_cost <= 0) ? dynamic_timeout_.GetStatus() : kEValuating;
         if (first->transfer_profile.task.long_polling) {
-            xinfo2(TSF"this task is long-polling %_ ", first->transfer_profile.task.cgi);
             first->transfer_profile.read_write_timeout = __ReadWriteTimeout(first->transfer_profile.task.long_polling_timeout);
         } else {
-            xinfo2(TSF"this task is not long-polling %_ ", first->transfer_profile.task.cgi);
             first->transfer_profile.read_write_timeout = __ReadWriteTimeout(first->transfer_profile.first_pkg_timeout);
         }
         first->transfer_profile.send_data_size = bufreq.Length();
@@ -318,6 +313,11 @@ void ShortLinkTaskManager::__RunOnStartTask() {
         worker->OnRecv.set(boost::bind(&ShortLinkTaskManager::__OnRecv, this, _1, _2, _3), worker, AYNC_HANDLER);
         worker->OnResponse.set(boost::bind(&ShortLinkTaskManager::__OnResponse, this, _1, _2, _3, _4, _5, _6, _7), worker, AYNC_HANDLER);
         worker->GetCacheSocket = boost::bind(&ShortLinkTaskManager::__OnGetCacheSocket, this, _1);
+        
+        if (!debug_host_.empty()) {
+          worker->SetDebugHost(debug_host_);
+        }
+
         first->running_id = (intptr_t)worker;
 
         xassert2(worker && first->running_id);
@@ -333,7 +333,7 @@ void ShortLinkTaskManager::__RunOnStartTask() {
         }
         worker->SendRequest(bufreq, buffer_extension);
 
-        xinfo2(TSF"task add into shortlink readwrite cgi:%_, cmdid:%_, taskid:%_, work:%_, size:%_, timeout(firstpkg:%_, rw:%_, task:%_), retry:%_, long-polling:%_, useProxy:%_",
+        xinfo2_if(first->task.priority>=0, TSF"task add into shortlink readwrite cgi:%_, cmdid:%_, taskid:%_, work:%_, size:%_, timeout(firstpkg:%_, rw:%_, task:%_), retry:%_, long-polling:%_, useProxy:%_",
                first->task.cgi, first->task.cmdid, first->task.taskid, (ShortLinkInterface*)first->running_id, first->transfer_profile.send_data_size, first->transfer_profile.first_pkg_timeout / 1000,
                first->transfer_profile.read_write_timeout / 1000, first->task_timeout / 1000, first->remain_retry_count, first->task.long_polling, first->use_proxy);
         ++sent_count;
@@ -397,7 +397,7 @@ void ShortLinkTaskManager::__OnResponse(ShortLinkInterface* _worker, ErrCmdType 
 
     int err_code = 0;
     int handle_type = Buf2Resp(it->task.taskid, it->task.user_context, it->task.user_id, _body, _extension, err_code, Task::kChannelShort);
-    xinfo2(TSF"err_code %_ ",err_code);
+    xinfo2_if(it->task.priority >= 0,  TSF"err_code %_ ",err_code);
     socket_pool_.Report(_conn_profile.is_reused_fd, true, handle_type==kTaskFailHandleNoError);
 
     switch(handle_type){
@@ -438,7 +438,7 @@ void ShortLinkTaskManager::__OnResponse(ShortLinkInterface* _worker, ErrCmdType 
             break;
         default:
         {
-            xassert2(false, TSF"task decode error fail_handle:%_, taskid:%_, context id:%_", handle_type, it->task.taskid, it->task.user_id);
+            xerror2(TSF"task decode error fail_handle:%_, taskid:%_, context id:%_", handle_type, it->task.taskid, it->task.user_id);
             __SingleRespHandle(it, kEctEnDecode, err_code, handle_type, (unsigned int)it->transfer_profile.receive_data_size, _conn_profile);
             xassert2(fun_notify_network_err_);
             fun_notify_network_err_(__LINE__, kEctEnDecode, handle_type, _conn_profile.ip, _conn_profile.host, _conn_profile.port);
@@ -673,7 +673,7 @@ ConnectProfile ShortLinkTaskManager::GetConnectProfile(uint32_t _taskid) const{
     std::list<TaskProfile>::const_iterator last = lst_cmd_.end();
     
     while (first != last) {
-        if (_taskid == first->task.taskid) {
+        if ((first->running_id) && _taskid == first->task.taskid) {
             return ((ShortLinkInterface*)(first->running_id))->Profile();
         }
         ++first;
